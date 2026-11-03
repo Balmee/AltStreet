@@ -1,0 +1,18 @@
+{
+  "model": "nvidia/segformer-b0-finetuned-ade-512-512",
+  "device": "cuda",
+  "source_image": "street.jpeg",
+  "image_width": 1500,
+  "image_height": 2000,
+  "inference_seconds": 0.4061,
+  "class_pixel_percentages": {
+    "building": 53.578,
+    "sky": 25.729,
+    "sidewalk": 15.974,
+    "person": 3.075,
+    "wall": 1.231,
+    "tree": 0.335,
+    "road": 0.052,
+    "flag": 0.025
+  }
+}
