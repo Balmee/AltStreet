@@ -44,6 +44,10 @@ public class OsmWorldImporter : MonoBehaviour
     private Material buildingMaterial;
     private Material namedMaterial;
 
+    [Header("Junctions")]
+    [SerializeField] private float junctionYOffset = 0.015f;
+    [SerializeField] private int junctionSegments = 12;
+
     [Serializable]
     private class OsmWorldData
     {
@@ -54,6 +58,15 @@ public class OsmWorldImporter : MonoBehaviour
         public RoadFeature[] roads;
         public BuildingFeature[] buildings;
         public float half_size_metres;
+    }
+
+    private class JunctionConnection
+    {
+        public long roadId;
+        public string highway;
+        public Vector3 position;
+        public Vector3 outwardDirection;
+        public float roadWidth;
     }
 
     [Serializable]
@@ -77,6 +90,7 @@ public class OsmWorldImporter : MonoBehaviour
         public long osm_id;
         public string highway;
         public string name;
+        public long[] node_ids;
         public GeoPoint[] coordinates;
     }
 
@@ -88,6 +102,81 @@ public class OsmWorldImporter : MonoBehaviour
         public string levels;
         public string name;
         public GeoPoint[] coordinates;
+    }
+
+    private Dictionary<long, List<JunctionConnection>>
+        FindSharedRoadNodes(RoadFeature[] roads)
+    {
+        var connections =
+            new Dictionary<long, List<JunctionConnection>>();
+
+        foreach (RoadFeature road in roads)
+        {
+            if (road.node_ids == null ||
+                road.coordinates == null)
+                continue;
+
+            int count = Mathf.Min(
+                road.node_ids.Length,
+                road.coordinates.Length
+            );
+
+            float width = GetRoadWidth(road.highway);
+
+            for (int i = 0; i < count; i++)
+            {
+                long nodeId = road.node_ids[i];
+
+                Vector3 position = new Vector3(
+                    road.coordinates[i].x,
+                    roadY + junctionYOffset,
+                    road.coordinates[i].z
+                );
+
+                Vector3 outward = Vector3.zero;
+
+                if (i > 0)
+                {
+                    outward += new Vector3(
+                        road.coordinates[i - 1].x - position.x,
+                        0f,
+                        road.coordinates[i - 1].z - position.z
+                    ).normalized;
+                }
+
+                if (i < count - 1)
+                {
+                    outward += new Vector3(
+                        road.coordinates[i + 1].x - position.x,
+                        0f,
+                        road.coordinates[i + 1].z - position.z
+                    ).normalized;
+                }
+
+                // Ignore nodes that cannot provide a usable direction.
+                if (outward.sqrMagnitude < 0.001f)
+                    continue;
+
+                outward.Normalize();
+
+                var connection = new JunctionConnection
+                {
+                    roadId = road.osm_id,
+                    highway = road.highway,
+                    position = position,
+                    outwardDirection = outward,
+                    roadWidth = width
+                };
+
+                if (!connections.ContainsKey(nodeId))
+                    connections[nodeId] =
+                        new List<JunctionConnection>();
+
+                connections[nodeId].Add(connection);
+            }
+        }
+
+        return connections;
     }
 
     private void Start()
@@ -151,6 +240,7 @@ public class OsmWorldImporter : MonoBehaviour
                 if (CreateRoad(road))
                     roadsCreated++;
             }
+            CreateJunctions(data.roads);
 
             foreach (BuildingFeature building in data.buildings)
             {
@@ -173,44 +263,171 @@ public class OsmWorldImporter : MonoBehaviour
         }
     }
 
+    private void CreateJunctionMesh(
+        Vector3 center,
+        float roadWidth,
+        string objectName)
+    {
+        int segments = Mathf.Max(8, junctionSegments);
+
+        // Expand slightly beyond the widest road's half-width.
+        float radius = roadWidth * 0.65f;
+
+        Vector3[] vertices = new Vector3[segments + 1];
+        int[] triangles = new int[segments * 3];
+
+        vertices[0] = center;
+
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = i * Mathf.PI * 2f / segments;
+
+            vertices[i + 1] = new Vector3(
+                center.x + Mathf.Cos(angle) * radius,
+                center.y,
+                center.z + Mathf.Sin(angle) * radius
+            );
+        }
+
+        for (int i = 0; i < segments; i++)
+        {
+            int next = (i + 1) % segments;
+
+            int triangleIndex = i * 3;
+
+            // Wind triangles so the visible face points upward.
+            triangles[triangleIndex] = 0;
+            triangles[triangleIndex + 1] = next + 1;
+            triangles[triangleIndex + 2] = i + 1;
+        }
+
+        Mesh mesh = new Mesh();
+        mesh.name = objectName;
+        mesh.vertices = vertices;
+        mesh.triangles = triangles;
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+
+        GameObject junction = new GameObject(objectName);
+        junction.transform.SetParent(generatedRoot, false);
+
+        MeshFilter filter = junction.AddComponent<MeshFilter>();
+        filter.sharedMesh = mesh;
+
+        MeshRenderer renderer =
+            junction.AddComponent<MeshRenderer>();
+
+        renderer.sharedMaterial = roadMaterial;
+
+        MeshCollider collider =
+            junction.AddComponent<MeshCollider>();
+
+        collider.sharedMesh = mesh;
+    }
     
     private void CreateGround(OsmWorldData data)
+        {
+            // Cover the complete imported area with a solid floor.
+            float halfSize = 180f;
+
+            if (data != null)
+            {
+                // The JSON's half_size_metres field is optional in this
+                // first version; use the exported value when available.
+                halfSize = data.half_size_metres > 0
+                    ? data.half_size_metres
+                    : 180f;
+            }
+
+            GameObject ground = GameObject.CreatePrimitive(
+                PrimitiveType.Cube
+            );
+
+            ground.name = "OSM_Ground";
+            ground.transform.SetParent(generatedRoot, false);
+
+            // Centre the ground on the geographic origin.
+            ground.transform.localPosition =
+                new Vector3(0f, groundY - 0.6f, 0f);
+
+            ground.transform.localScale =
+                new Vector3(halfSize * 2f, 1f, halfSize * 2f);
+
+            Renderer renderer = ground.GetComponent<Renderer>();
+
+            if (renderer != null)
+            {
+                renderer.sharedMaterial = buildingMaterial;
+            }
+
+            // CreatePrimitive adds a BoxCollider automatically.
+            // The top of the cube is exactly at groundY - 0.1f.
+        }
+
+        private void CreateJunctions(RoadFeature[] roads)
     {
-        // Cover the complete imported area with a solid floor.
-        float halfSize = 180f;
+        var connections = FindSharedRoadNodes(roads);
 
-        if (data != null)
+        int created = 0;
+
+        foreach (var entry in connections)
         {
-            // The JSON's half_size_metres field is optional in this
-            // first version; use the exported value when available.
-            halfSize = data.half_size_metres > 0
-                ? data.half_size_metres
-                : 180f;
+            List<JunctionConnection> nodeConnections =
+                entry.Value;
+
+            // Remove duplicate references to the same road.
+            Dictionary<long, JunctionConnection> uniqueRoads =
+                new Dictionary<long, JunctionConnection>();
+
+            foreach (JunctionConnection connection in nodeConnections)
+            {
+                if (!uniqueRoads.ContainsKey(connection.roadId))
+                    uniqueRoads.Add(
+                        connection.roadId,
+                        connection
+                    );
+            }
+
+            if (uniqueRoads.Count < 2)
+                continue;
+
+            List<JunctionConnection> items =
+                new List<JunctionConnection>(uniqueRoads.Values);
+
+            float maxWidth = 0f;
+
+            foreach (JunctionConnection connection in items)
+                maxWidth = Mathf.Max(maxWidth, connection.roadWidth);
+
+            bool isJunction = items.Count >= 3;
+
+            // Two road features can also form a bend or non-straight join.
+            if (!isJunction && items.Count == 2)
+            {
+                float dot = Vector3.Dot(
+                    items[0].outwardDirection,
+                    items[1].outwardDirection
+                );
+
+                // Opposing directions indicate a nearly straight continuation.
+                isJunction = dot > -0.85f;
+            }
+
+            if (!isJunction)
+                continue;
+
+            CreateJunctionMesh(
+                items[0].position,
+                maxWidth,
+                $"Junction_{entry.Key}"
+            );
+
+            created++;
         }
 
-        GameObject ground = GameObject.CreatePrimitive(
-            PrimitiveType.Cube
+        Debug.Log(
+            $"STREETVISION: Created {created} road junction surfaces."
         );
-
-        ground.name = "OSM_Ground";
-        ground.transform.SetParent(generatedRoot, false);
-
-        // Centre the ground on the geographic origin.
-        ground.transform.localPosition =
-            new Vector3(0f, groundY - 0.6f, 0f);
-
-        ground.transform.localScale =
-            new Vector3(halfSize * 2f, 1f, halfSize * 2f);
-
-        Renderer renderer = ground.GetComponent<Renderer>();
-
-        if (renderer != null)
-        {
-            renderer.sharedMaterial = buildingMaterial;
-        }
-
-        // CreatePrimitive adds a BoxCollider automatically.
-        // The top of the cube is exactly at groundY - 0.1f.
     }
 
 
@@ -392,11 +609,11 @@ public class OsmWorldImporter : MonoBehaviour
 
         collider.sharedMesh = mesh;
 
-        CreatePavementsForRoad(
-            points,
-            width,
-            $"Pavement_{road.osm_id}"
-        );
+        // CreatePavementsForRoad(
+        //     points,
+        //     width,
+        //     $"Pavement_{road.osm_id}"
+        // );
 
         return true;
     }
