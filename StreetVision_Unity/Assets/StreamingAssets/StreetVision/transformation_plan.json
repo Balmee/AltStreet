@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "source": {
+    "model": "nvidia/segformer-b0-finetuned-ade-512-512",
+    "source_image": "street.jpeg"
+  },
+  "method": "segmentation_informed_rules",
+  "visual_profile": {
+    "building_coverage": 0.5358,
+    "wall_coverage": 0.0123,
+    "sky_coverage": 0.2573,
+    "sidewalk_coverage": 0.1597,
+    "road_coverage": 0.0005,
+    "vegetation_coverage": 0.0034,
+    "enclosure": 0.3526
+  },
+  "transformation": {
+    "horror_intensity": 0.6499,
+    "fog_density": 0.0336,
+    "exposure_adjustment": -0.5544,
+    "saturation_multiplier": 0.55,
+    "vegetation_overgrowth": 0.155,
+    "streetlight_flicker_probability": 0.2739,
+    "ambient_audio_profile": "urban_wind_low",
+    "material_profile": "weathered_cold",
+    "lighting_profile": "psychological_horror"
+  },
+  "unity_notes": [
+    "Preserve original road and building geometry.",
+    "Apply fog and lighting through scene settings.",
+    "Use overgrowth only where suitable placement points exist.",
+    "Use flicker probability as an effect trigger probability, not a guaranteed flicker on every light."
+  ]
+}

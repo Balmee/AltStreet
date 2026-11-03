@@ -16,7 +16,7 @@ PLACE_QUERY = "Trafalgar Square, London, UK"
 # A small initial area, roughly a few hundred metres across.
 HALF_SIZE_METRES = 180
 
-USER_AGENT = "STREETVISION/0.1 (contact: b.hunumunt0820231@arts.ac.uk)"
+USER_AGENT = "STREETVISION/0.1 (contact: 147705156+Balmee@users.noreply.github.com)"
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
