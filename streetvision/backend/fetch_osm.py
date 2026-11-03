@@ -16,7 +16,7 @@ PLACE_QUERY = "Trafalgar Square, London, UK"
 # A small initial area, roughly a few hundred metres across.
 HALF_SIZE_METRES = 180
 
-USER_AGENT = "STREETVISION/0.1 (contact: 147705156+Balmee@users.noreply.github.com)"
+USER_AGENT = "STREETVISION/0.1 (contact: b.hunumunt0820231@arts.ac.uk)"
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -70,10 +70,11 @@ def query_osm(bbox):
     query = f"""
     [out:json][timeout:40];
     (
-      way["highway"]({south},{west},{north},{east});
-      way["building"]({south},{west},{north},{east});
+    way["highway"]({south},{west},{north},{east});
+    way["building"]({south},{west},{north},{east});
     );
-    out body geom;
+    (._;>;);
+    out body;
     """
 
     response = requests.post(
@@ -111,6 +112,18 @@ def to_local_coordinates(geometry, origin_lat, origin_lon):
 
 
 def convert_elements(elements, origin_lat, origin_lon):
+    # Index all returned nodes by their OSM IDs.
+    node_lookup = {
+        element["id"]: {
+            "lat": element["lat"],
+            "lon": element["lon"]
+        }
+        for element in elements
+        if element.get("type") == "node"
+        and "lat" in element
+        and "lon" in element
+    }
+
     roads = []
     buildings = []
 
@@ -118,42 +131,53 @@ def convert_elements(elements, origin_lat, origin_lon):
         if element.get("type") != "way":
             continue
 
-        geometry = element.get("geometry", [])
+        tags = element.get("tags", {})
+        node_ids = element.get("nodes", [])
+
+        # Reconstruct this way's coordinates from its node references.
+        geometry = [
+            node_lookup[node_id]
+            for node_id in node_ids
+            if node_id in node_lookup
+        ]
 
         if len(geometry) < 2:
             continue
 
-        
         coordinates = to_local_coordinates(
-            element["geometry"],
+            geometry,
             origin_lat,
             origin_lon
         )
-
-
-        tags = element.get("tags", {})
 
         if "highway" in tags:
             roads.append({
                 "osm_id": element["id"],
                 "highway": tags["highway"],
                 "name": tags.get("name", ""),
-                "coordinates": coordinates,
+                "node_ids": node_ids,
+                "coordinates": coordinates
             })
 
-        if "building" in tags:
-            # Building ways should form closed outlines.
-            if len(coordinates) >= 4 and coordinates[0] == coordinates[-1]:
+        elif "building" in tags:
+            if len(coordinates) < 3:
+                continue
+
+            # Remove the repeated closing coordinate from the footprint.
+            if (
+                len(coordinates) > 2
+                and coordinates[0] == coordinates[-1]
+            ):
                 coordinates = coordinates[:-1]
 
-            if len(coordinates) >= 3:
-                buildings.append({
-                    "osm_id": element["id"],
-                    "building": tags["building"],
-                    "levels": tags.get("building:levels"),
-                    "name": tags.get("name", ""),
-                    "coordinates": coordinates,
-                })
+            buildings.append({
+                "osm_id": element["id"],
+                "building": tags["building"],
+                "levels": tags.get("building:levels"),
+                "name": tags.get("name", ""),
+                "node_ids": node_ids,
+                "coordinates": coordinates
+            })
 
     return roads, buildings
 

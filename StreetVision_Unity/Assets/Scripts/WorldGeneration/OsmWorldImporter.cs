@@ -17,7 +17,7 @@ public class OsmWorldImporter : MonoBehaviour
     
     [Header("Pavements")]
     [SerializeField] private float pavementWidth = 2.5f;
-    [SerializeField] private float pavementHeight = 0.2f;
+    [SerializeField] private float pavementHeight = 0.05f;
     [SerializeField] private float pavementY = 0.02f;
 
     [SerializeField] private Color pavementColor =
@@ -280,65 +280,96 @@ public class OsmWorldImporter : MonoBehaviour
             return false;
 
         float width = GetRoadWidth(road.highway);
+        float halfWidth = width * 0.5f;
 
-        List<Vector3> vertices = new List<Vector3>();
-        List<int> triangles = new List<int>();
+        int count = points.Count;
 
-        for (int i = 0; i < points.Count - 1; i++)
+        Vector3[] vertices = new Vector3[count * 2];
+        int[] triangles = new int[(count - 1) * 6];
+
+        for (int i = 0; i < count; i++)
         {
-            Vector3 start = points[i];
-            Vector3 end = points[i + 1];
+            Vector3 direction;
 
-            Vector3 direction = end - start;
+            if (i == 0)
+            {
+                direction = points[1] - points[0];
+            }
+            else if (i == count - 1)
+            {
+                direction = points[i] - points[i - 1];
+            }
+            else
+            {
+                Vector3 incoming =
+                    (points[i] - points[i - 1]).normalized;
+
+                Vector3 outgoing =
+                    (points[i + 1] - points[i]).normalized;
+
+                direction = incoming + outgoing;
+
+                if (direction.sqrMagnitude < 0.001f)
+                    direction = outgoing;
+            }
+
             direction.y = 0f;
-
-            float length = direction.magnitude;
-
-            if (length < 0.01f)
-                continue;
-
             direction.Normalize();
 
-            Vector3 side = new Vector3(
+            Vector3 perpendicular = new Vector3(
                 -direction.z, 0f, direction.x
-            ) * (width * 0.5f);
-
-            CreatePavementSegment(
-                start,
-                end,
-                side,
-                width,
-                $"Pavement_{road.osm_id}_{i}"
             );
 
-            int index = vertices.Count;
+            float scale = halfWidth;
 
-            vertices.Add(start + side);
-            vertices.Add(start - side);
-            vertices.Add(end - side);
-            vertices.Add(end + side);
+            // Compensate for the angle at bends.
+            if (i > 0 && i < count - 1)
+            {
+                Vector3 incoming =
+                    (points[i] - points[i - 1]).normalized;
 
-            // Upward-facing triangles.
-            triangles.Add(index);
-            triangles.Add(index + 2);
-            triangles.Add(index + 1);
+                Vector3 outgoing =
+                    (points[i + 1] - points[i]).normalized;
 
-            triangles.Add(index);
-            triangles.Add(index + 3);
-            triangles.Add(index + 2);
+                Vector3 incomingSide =
+                    new Vector3(-incoming.z, 0f, incoming.x);
+
+                float denominator =
+                    Vector3.Dot(perpendicular, incomingSide);
+
+                if (Mathf.Abs(denominator) > 0.25f)
+                    scale = Mathf.Min(
+                        halfWidth / Mathf.Abs(denominator),
+                        halfWidth * 2f
+                    );
+            }
+
+            Vector3 offset = perpendicular * scale;
+
+            vertices[i * 2] = points[i] + offset;
+            vertices[i * 2 + 1] = points[i] - offset;
         }
 
-        if (vertices.Count == 0)
-            return false;
+        for (int i = 0; i < count - 1; i++)
+        {
+            int vertex = i * 2;
+            int triangle = i * 6;
+
+            triangles[triangle] = vertex;
+            triangles[triangle + 1] = vertex + 2;
+            triangles[triangle + 2] = vertex + 1;
+
+            triangles[triangle + 3] = vertex + 1;
+            triangles[triangle + 4] = vertex + 2;
+            triangles[triangle + 5] = vertex + 3;
+        }
 
         Mesh mesh = new Mesh();
         mesh.name = $"OSM_Road_{road.osm_id}";
 
-        if (vertices.Count > 65000)
-            mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        mesh.vertices = vertices;
+        mesh.triangles = triangles;
 
-        mesh.SetVertices(vertices);
-        mesh.SetTriangles(triangles, 0);
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
 
@@ -356,10 +387,16 @@ public class OsmWorldImporter : MonoBehaviour
 
         renderer.sharedMaterial = roadMaterial;
 
-        MeshCollider roadCollider =
+        MeshCollider collider =
             roadObject.AddComponent<MeshCollider>();
 
-        roadCollider.sharedMesh = mesh;
+        collider.sharedMesh = mesh;
+
+        CreatePavementsForRoad(
+            points,
+            width,
+            $"Pavement_{road.osm_id}"
+        );
 
         return true;
     }
@@ -398,75 +435,174 @@ public class OsmWorldImporter : MonoBehaviour
         }
     }
 
+
+
         
-    private void CreatePavementSegment(
-        Vector3 start,
-        Vector3 end,
-        Vector3 side,
-        float width,
+    private void CreatePavementsForRoad(
+        List<Vector3> points,
+        float roadWidth,
         string name)
     {
-        // side points perpendicular to the road.
-        // Create one pavement strip on each side.
-        CreatePavementQuad(
-            start + side,
-            end + side,
-            start + side * 2f,
-            end + side * 2f,
-            name + "_Left"
+        if (points == null || points.Count < 2)
+            return;
+
+        int count = points.Count;
+
+        Vector3[] leftInner = new Vector3[count];
+        Vector3[] leftOuter = new Vector3[count];
+
+        Vector3[] rightInner = new Vector3[count];
+        Vector3[] rightOuter = new Vector3[count];
+
+        float halfRoad = roadWidth * 0.5f;
+
+        for (int i = 0; i < count; i++)
+        {
+            Vector3 direction;
+
+            if (i == 0)
+                direction = points[1] - points[0];
+            else if (i == count - 1)
+                direction = points[i] - points[i - 1];
+            else
+            {
+                Vector3 incoming =
+                    (points[i] - points[i - 1]).normalized;
+
+                Vector3 outgoing =
+                    (points[i + 1] - points[i]).normalized;
+
+                direction = incoming + outgoing;
+
+                if (direction.sqrMagnitude < 0.001f)
+                    direction = outgoing;
+            }
+
+            direction.y = 0f;
+            direction.Normalize();
+
+            Vector3 side = new Vector3(
+                -direction.z, 0f, direction.x
+            );
+
+            float scale = halfRoad;
+
+            if (i > 0 && i < count - 1)
+            {
+                Vector3 incoming =
+                    (points[i] - points[i - 1]).normalized;
+
+                Vector3 incomingSide = new Vector3(
+                    -incoming.z, 0f, incoming.x
+                );
+
+                float denominator =
+                    Vector3.Dot(side, incomingSide);
+
+                if (Mathf.Abs(denominator) > 0.25f)
+                    scale = Mathf.Min(
+                        halfRoad / Mathf.Abs(denominator),
+                        halfRoad * 2f
+                    );
+            }
+
+            Vector3 innerOffset = side * scale;
+            Vector3 outerOffset =
+                side * (scale + pavementWidth);
+
+            Vector3 point = points[i];
+
+            leftInner[i] = new Vector3(
+                point.x + innerOffset.x,
+                pavementY + pavementHeight,
+                point.z + innerOffset.z
+            );
+
+            leftOuter[i] = new Vector3(
+                point.x + outerOffset.x,
+                pavementY + pavementHeight,
+                point.z + outerOffset.z
+            );
+
+            rightInner[i] = new Vector3(
+                point.x - innerOffset.x,
+                pavementY + pavementHeight,
+                point.z - innerOffset.z
+            );
+
+            rightOuter[i] = new Vector3(
+                point.x - outerOffset.x,
+                pavementY + pavementHeight,
+                point.z - outerOffset.z
+            );
+        }
+
+        CreatePavementMesh(
+            leftInner,
+            leftOuter,
+            $"{name}_Left"
         );
 
-        CreatePavementQuad(
-            start - side,
-            end - side,
-            start - side * 2f,
-            end - side * 2f,
-            name + "_Right"
+        CreatePavementMesh(
+            rightInner,
+            rightOuter,
+            $"{name}_Right"
         );
     }
 
-    private void CreatePavementQuad(
-        Vector3 innerStart,
-        Vector3 innerEnd,
-        Vector3 outerStart,
-        Vector3 outerEnd,
-        string name)
+    private void CreatePavementMesh(
+        Vector3[] inner,
+        Vector3[] outer,
+        string objectName)
     {
-        float innerY = pavementY + pavementHeight;
-        float outerY = innerY;
+        int count = inner.Length;
 
-        Vector3[] vertices =
+        Vector3[] vertices = new Vector3[count * 2];
+        int[] triangles = new int[(count - 1) * 6];
+
+        for (int i = 0; i < count; i++)
         {
-            new Vector3(innerStart.x, innerY, innerStart.z),
-            new Vector3(outerStart.x, outerY, outerStart.z),
-            new Vector3(outerEnd.x, outerY, outerEnd.z),
-            new Vector3(innerEnd.x, innerY, innerEnd.z)
-        };
+            vertices[i * 2] = inner[i];
+            vertices[i * 2 + 1] = outer[i];
+        }
+
+        for (int i = 0; i < count - 1; i++)
+        {
+            int vertex = i * 2;
+            int triangle = i * 6;
+
+            triangles[triangle] = vertex;
+            triangles[triangle + 1] = vertex + 2;
+            triangles[triangle + 2] = vertex + 1;
+
+            triangles[triangle + 3] = vertex + 1;
+            triangles[triangle + 4] = vertex + 2;
+            triangles[triangle + 5] = vertex + 3;
+        }
 
         Mesh mesh = new Mesh();
-        mesh.name = name;
-        mesh.vertices = vertices;
+        mesh.name = objectName;
 
-        // Both triangles face upward.
-        mesh.triangles = new[]
-        {
-            0, 2, 1,
-            0, 3, 2
-        };
+        mesh.vertices = vertices;
+        mesh.triangles = triangles;
 
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
 
-        GameObject pavement = new GameObject(name);
+        GameObject pavement = new GameObject(objectName);
         pavement.transform.SetParent(generatedRoot, false);
 
         MeshFilter filter = pavement.AddComponent<MeshFilter>();
         filter.sharedMesh = mesh;
 
-        MeshRenderer renderer = pavement.AddComponent<MeshRenderer>();
+        MeshRenderer renderer =
+            pavement.AddComponent<MeshRenderer>();
+
         renderer.sharedMaterial = pavementMaterial;
 
-        MeshCollider collider = pavement.AddComponent<MeshCollider>();
+        MeshCollider collider =
+            pavement.AddComponent<MeshCollider>();
+
         collider.sharedMesh = mesh;
     }
 

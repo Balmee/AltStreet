@@ -24,3 +24,11 @@ print("\nBuildings with at least 3 footprint points:",
           len(building["coordinates"]) >= 3
           for building in data["buildings"]
       ))
+
+print("\nFirst road node IDs:")
+if data["roads"]:
+    print(data["roads"][0]["node_ids"][:10])
+
+print("\nFirst building node IDs:")
+if data["buildings"]:
+    print(data["buildings"][0]["node_ids"][:10])
